@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>C-K Model Engine</title>
+  <link rel="stylesheet" href="./style.css" />
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/cytoscape/3.34.2/cytoscape.min.js"></script>
+</head>
+<body>
+
+  <!-- LEFT PANE: JSON COPY/PASTE BOX -->
+  <div id="sidebar">
+    <div id="toolbar">
+      <span><strong>Paste / Edit C-K JSON</strong></span>
+      <button id="reset-coords-btn" type="button">Reset Layout</button>
+    </div>
+
+    <textarea id="json-editor" spellcheck="false">{
+  "rootId": "c0",
+  "concepts": [
+    { "id": "c0", "label": "C0: Zero-footprint urban transport" },
+    { "id": "c1", "label": "C1: Foldable bike-tent", "partition": "expansive" },
+    { "id": "c2", "label": "C2: Autonomous micro-pod", "partition": "restrictive" },
+    { "id": "c3", "label": "C3: Self-inflating airframe", "partition": "expansive" },
+    { "id": "c4", "label": "C4: Solar fabric canopy", "partition": "expansive" },
+    { "id": "c5", "label": "C5: Modular battery swap", "partition": "restrictive" },
+    { "id": "c6", "label": "C6: Sidewalk platoon mode", "partition": "expansive" },
+    { "id": "c7", "label": "C7: Orphan drone idea", "partition": "restrictive" }
+  ],
+  "knowledge": [
+    { "id": "k1", "label": "K1: Carbon hinge tolerances", "status": "validated" },
+    { "id": "k2", "label": "K2: Drop-stitch pneumatic stiffness", "status": "validated" },
+    { "id": "k3", "label": "K3: Flexible perovskite solar yield", "status": "pending" },
+    { "id": "k4", "label": "K4: EU micro-mobility width laws", "status": "validated" }
+  ],
+  "links": [
+    { "from": "c0", "to": "c1" },
+    { "from": "c0", "to": "c2" },
+    { "from": "c1", "to": "c3" },
+    { "from": "c1", "to": "c4" },
+    { "from": "c2", "to": "c5" },
+    { "from": "c5", "to": "c6" },
+    { "from": "k1", "to": "c1" },
+    { "from": "k2", "to": "c3" },
+    { "from": "c4", "to": "k3" },
+    { "from": "k4", "to": "c6" }
+  ]
+}</textarea>
+
+    <div id="status-bar">Ready — Scroll/pinch to zoom, drag background to pan.</div>
+  </div>
+
+  <!-- RIGHT PANE: INFINITE PAN & ZOOM TWO-SPACE CANVAS -->
+  <div id="canvas-wrap">
+    <!-- Dynamic World-Space Backdrop (Moves with Pan & Zoom!) -->
+    <div id="space-backdrop">
+      <div id="c-zone-bg"></div>
+      <div id="k-zone-bg"></div>
+      <div id="divider-line"></div>
+    </div>
+
+    <!-- Pinned Column Badges -->
+    <div id="space-badges">
+      <span class="badge c-badge">← C — Concept Space</span>
+      <span class="badge k-badge">K — Knowledge Space →</span>
+    </div>
+
+    <!-- Interactive Cytoscape Canvas -->
+    <div id="ck-canvas"></div>
+
+    <!-- Floating Viewport Controls for Huge Diagrams -->
+    <div id="zoom-controls">
+      <button id="zoom-in-btn" type="button" title="Zoom In">+</button>
+      <button id="zoom-out-btn" type="button" title="Zoom Out">−</button>
+      <button id="fit-btn" type="button" title="Fit Entire Diagram">Fit All</button>
+    </div>
+  </div>
+
+  <script src="./app.js"></script>
+</body>
+</html>
