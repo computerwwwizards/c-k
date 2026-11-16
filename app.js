@@ -322,19 +322,32 @@ const LIGHT_STYLE = [
   { selector: "node[?isLeaf]", style: { "shape": "barrel", "background-color": "#fffbeb", "border-color": "#d97706", "border-width": 3 } },
   { selector: 'node[space = "K"]', style: { "shape": "rectangle", "background-color": "#f0fdf4", "border-color": "#22c55e" } },
   { selector: "node[?hasViolation]", style: { "shape": "round-rectangle", "background-color": "#fef2f2", "border-color": "#ef4444", "border-width": 3 } },
+  
+  // Base Edge (C->C, K->K)
   { selector: "edge", style: { "width": 2, "curve-style": "bezier", "target-arrow-shape": "triangle", "line-color": "#64748b", "target-arrow-color": "#64748b" } },
-  { selector: 'edge[operator = "KC"], edge[operator = "CK"]', style: { "line-style": "dashed", "line-color": "#9333ea", "target-arrow-color": "#9333ea" } }
+  
+  // KC: Knowledge -> Concept (Continuous line, Emerald)
+  { selector: 'edge[operator = "KC"]', style: { "line-style": "solid", "line-color": "#059669", "target-arrow-color": "#059669", "target-arrow-shape": "triangle" } },
+  
+  // CK: Concept -> Knowledge (Dashed line, Fuchsia, Vee Arrow)
+  { selector: 'edge[operator = "CK"]', style: { "line-style": "dashed", "line-color": "#d946ef", "target-arrow-color": "#d946ef", "target-arrow-shape": "vee" } }
 ];
 
-// Refined non-bluish dark mode centered around #191919 grays
 const DARK_STYLE = [
   { selector: "node", style: { "label": "data(displayLabel)", "text-wrap": "wrap", "text-max-width": "175px", "text-valign": "center", "text-halign": "center", "font-size": "12px", "shape": "round-rectangle", "width": 200, "height": 72, "border-width": 2, "color": "#f5f5f5", "background-color": "#262626", "border-color": "#525252" } },
   { selector: "node[?isRoot]", style: { "background-color": "#333333", "border-color": "#737373", "border-width": 3, "font-weight": "bold" } },
   { selector: "node[?isLeaf]", style: { "shape": "barrel", "background-color": "#382e1c", "border-color": "#d97706", "border-width": 3 } },
   { selector: 'node[space = "K"]', style: { "shape": "rectangle", "background-color": "#1e3323", "border-color": "#22c55e" } },
   { selector: "node[?hasViolation]", style: { "shape": "round-rectangle", "background-color": "#451a1a", "border-color": "#ef4444", "border-width": 3 } },
+  
+  // Base Edge (C->C, K->K)
   { selector: "edge", style: { "width": 2, "curve-style": "bezier", "target-arrow-shape": "triangle", "line-color": "#737373", "target-arrow-color": "#737373" } },
-  { selector: 'edge[operator = "KC"], edge[operator = "CK"]', style: { "line-style": "dashed", "line-color": "#a855f7", "target-arrow-color": "#a855f7" } }
+  
+  // KC: Knowledge -> Concept (Continuous line, Emerald)
+  { selector: 'edge[operator = "KC"]', style: { "line-style": "solid", "line-color": "#10b981", "target-arrow-color": "#10b981", "target-arrow-shape": "triangle" } },
+  
+  // CK: Concept -> Knowledge (Dashed line, Fuchsia, Vee Arrow)
+  { selector: 'edge[operator = "CK"]', style: { "line-style": "dashed", "line-color": "#e879f9", "target-arrow-color": "#e879f9", "target-arrow-shape": "vee" } }
 ];
 
 let isDarkMode = true;
@@ -353,7 +366,6 @@ const cy = cytoscape({
 
 function applyTheme() {
   if (canvasWrapEl) {
-    // Neutral dark background instead of deep blue
     canvasWrapEl.style.backgroundColor = isDarkMode ? "#191919" : "#ffffff";
   }
   cy.style().fromJson(isDarkMode ? DARK_STYLE : LIGHT_STYLE).update();
@@ -373,7 +385,6 @@ function fitAllNodes() {
   if (cy.elements().length > 0) cy.fit(cy.elements(), 60);
 }
 
-// Hooks into the existing <div id="zoom-controls"> in your HTML
 function setupZoomAndThemeControls() {
   let zoomInBtn = document.getElementById("zoom-in-btn");
   let zoomOutBtn = document.getElementById("zoom-out-btn");
@@ -389,9 +400,7 @@ function setupZoomAndThemeControls() {
     themeBtn.textContent = isDarkMode ? "☀️ Light" : "🌙 Dark";
     themeBtn.title = "Toggle Dark/Light Mode";
     
-    // Inject custom styling for the theme button to match your existing buttons roughly
     themeBtn.style.cssText = "margin-right: 8px; cursor: pointer; padding: 4px 8px;";
-    
     controlsContainer.insertBefore(themeBtn, controlsContainer.firstChild);
   }
 
@@ -646,7 +655,6 @@ if (exportBtn) {
   exportBtn.addEventListener("click", () => URLSync.exportToUrl());
 }
 
-// Execute setup once DOM is fully loaded to ensure the HTML container exists
 window.addEventListener("DOMContentLoaded", async () => {
   setupZoomAndThemeControls();
   
