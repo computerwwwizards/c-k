@@ -364,7 +364,7 @@ const LayoutEngine = {
 };
 
 // ============================================================================
-// LAYER 3: FAST ZOOM CANVAS RENDERER & FLOATING CONTROLS
+// LAYER 3: FAST ZOOM CANVAS RENDERER, THEMING & FLOATING CONTROLS
 // ============================================================================
 const editorEl = document.getElementById("json-editor");
 const statusEl = document.getElementById("status-bar");
@@ -372,6 +372,28 @@ const resetBtn = document.getElementById("reset-coords-btn");
 const canvasWrapEl = document.getElementById("canvas-wrap");
 const canvasEl = document.getElementById("ck-canvas");
 const cColEl = document.querySelector(".c-col");
+
+const LIGHT_STYLE = [
+  { selector: "node", style: { "label": "data(displayLabel)", "text-wrap": "wrap", "text-max-width": "175px", "text-valign": "center", "text-halign": "center", "font-size": "12px", "shape": "round-rectangle", "width": 200, "height": 72, "border-width": 2, "color": "#0f172a", "background-color": "#eff6ff", "border-color": "#3b82f6" } },
+  { selector: "node[?isRoot]", style: { "background-color": "#dbeafe", "border-color": "#1d4ed8", "border-width": 3, "font-weight": "bold" } },
+  { selector: "node[?isLeaf]", style: { "shape": "barrel", "background-color": "#fffbeb", "border-color": "#d97706", "border-width": 3 } },
+  { selector: 'node[space = "K"]', style: { "shape": "rectangle", "background-color": "#f0fdf4", "border-color": "#22c55e" } },
+  { selector: "node[?hasViolation]", style: { "shape": "round-rectangle", "background-color": "#fef2f2", "border-color": "#ef4444", "border-width": 3 } },
+  { selector: "edge", style: { "width": 2, "curve-style": "bezier", "target-arrow-shape": "triangle", "line-color": "#64748b", "target-arrow-color": "#64748b" } },
+  { selector: 'edge[operator = "KC"], edge[operator = "CK"]', style: { "line-style": "dashed", "line-color": "#9333ea", "target-arrow-color": "#9333ea" } }
+];
+
+const DARK_STYLE = [
+  { selector: "node", style: { "label": "data(displayLabel)", "text-wrap": "wrap", "text-max-width": "175px", "text-valign": "center", "text-halign": "center", "font-size": "12px", "shape": "round-rectangle", "width": 200, "height": 72, "border-width": 2, "color": "#f8fafc", "background-color": "#1e293b", "border-color": "#3b82f6" } },
+  { selector: "node[?isRoot]", style: { "background-color": "#1e3a8a", "border-color": "#60a5fa", "border-width": 3, "font-weight": "bold" } },
+  { selector: "node[?isLeaf]", style: { "shape": "barrel", "background-color": "#451a03", "border-color": "#fbbf24", "border-width": 3 } },
+  { selector: 'node[space = "K"]', style: { "shape": "rectangle", "background-color": "#064e3b", "border-color": "#34d399" } },
+  { selector: "node[?hasViolation]", style: { "shape": "round-rectangle", "background-color": "#7f1d1d", "border-color": "#f87171", "border-width": 3 } },
+  { selector: "edge", style: { "width": 2, "curve-style": "bezier", "target-arrow-shape": "triangle", "line-color": "#94a3b8", "target-arrow-color": "#94a3b8" } },
+  { selector: 'edge[operator = "KC"], edge[operator = "CK"]', style: { "line-style": "dashed", "line-color": "#c084fc", "target-arrow-color": "#c084fc" } }
+];
+
+let isDarkMode = true;
 
 const cy = cytoscape({
   container: canvasEl,
@@ -382,80 +404,16 @@ const cy = cytoscape({
   maxZoom: 4.0,
   wheelSensitivity: 2.5,
   pixelRatio: Math.min(window.devicePixelRatio || 1, 2),
-  style: [
-    {
-      selector: "node",
-      style: {
-        "label": "data(displayLabel)",
-        "text-wrap": "wrap",
-        "text-max-width": "175px",
-        "text-valign": "center",
-        "text-halign": "center",
-        "font-size": "12px",
-        "color": "#0f172a",
-        "shape": "round-rectangle",
-        "width": 200,
-        "height": 72,
-        "background-color": "#eff6ff",
-        "border-width": 2,
-        "border-color": "#3b82f6"
-      }
-    },
-    {
-      selector: "node[?isRoot]",
-      style: {
-        "background-color": "#dbeafe",
-        "border-color": "#1d4ed8",
-        "border-width": 3,
-        "font-weight": "bold"
-      }
-    },
-    {
-      selector: "node[?isLeaf]",
-      style: {
-        "shape": "barrel",
-        "background-color": "#fffbeb",
-        "border-color": "#d97706",
-        "border-width": 3
-      }
-    },
-    {
-      selector: 'node[space = "K"]',
-      style: {
-        "shape": "rectangle",
-        "background-color": "#f0fdf4",
-        "border-color": "#22c55e"
-      }
-    },
-    {
-      selector: "node[?hasViolation]",
-      style: {
-        "shape": "round-rectangle",
-        "background-color": "#fef2f2",
-        "border-color": "#ef4444",
-        "border-width": 3
-      }
-    },
-    {
-      selector: "edge",
-      style: {
-        "width": 2,
-        "curve-style": "bezier",
-        "target-arrow-shape": "triangle",
-        "line-color": "#64748b",
-        "target-arrow-color": "#64748b"
-      }
-    },
-    {
-      selector: 'edge[operator = "KC"], edge[operator = "CK"]',
-      style: {
-        "line-style": "dashed",
-        "line-color": "#9333ea",
-        "target-arrow-color": "#9333ea"
-      }
-    }
-  ]
+  style: DARK_STYLE
 });
+
+function applyTheme() {
+  if (canvasWrapEl) {
+    canvasWrapEl.style.backgroundColor = isDarkMode ? "#020617" : "#ffffff";
+  }
+  cy.style().fromJson(isDarkMode ? DARK_STYLE : LIGHT_STYLE).update();
+}
+applyTheme();
 
 function zoomByFactor(factor) {
   const rect = canvasEl.getBoundingClientRect();
@@ -472,10 +430,11 @@ function fitAllNodes() {
   }
 }
 
-(function setupZoomControls() {
+(function setupZoomAndThemeControls() {
   let zoomInBtn = document.getElementById("zoom-in-btn");
   let zoomOutBtn = document.getElementById("zoom-out-btn");
   let fitBtn = document.getElementById("fit-btn") || document.getElementById("fit-all-btn");
+  let themeBtn = document.getElementById("theme-toggle-btn");
 
   if (!zoomInBtn && !zoomOutBtn && !fitBtn && canvasWrapEl) {
     const bar = document.createElement("div");
@@ -488,24 +447,32 @@ function fitAllNodes() {
       "cursor:pointer;font-size:13px;font-weight:700;user-select:none;";
 
     zoomInBtn = document.createElement("button");
-    zoomInBtn.type = "button";
     zoomInBtn.textContent = "+";
     zoomInBtn.title = "Zoom In";
     zoomInBtn.style.cssText = btnCss;
 
     zoomOutBtn = document.createElement("button");
-    zoomOutBtn.type = "button";
     zoomOutBtn.textContent = "-";
     zoomOutBtn.title = "Zoom Out";
     zoomOutBtn.style.cssText = btnCss;
 
     fitBtn = document.createElement("button");
-    fitBtn.type = "button";
     fitBtn.textContent = "Fit All";
     fitBtn.title = "Fit Entire Diagram";
     fitBtn.style.cssText = btnCss + "background:#3b82f6;";
 
-    bar.append(zoomInBtn, zoomOutBtn, fitBtn);
+    themeBtn = document.createElement("button");
+    themeBtn.textContent = isDarkMode ? "☀️ Light" : "🌙 Dark";
+    themeBtn.title = "Toggle Dark/Light Mode";
+    themeBtn.style.cssText = btnCss + "background:#64748b; margin-right: 8px;";
+
+    themeBtn.addEventListener("click", () => {
+      isDarkMode = !isDarkMode;
+      themeBtn.textContent = isDarkMode ? "☀️ Light" : "🌙 Dark";
+      applyTheme();
+    });
+
+    bar.append(themeBtn, zoomInBtn, zoomOutBtn, fitBtn);
     canvasWrapEl.appendChild(bar);
   }
 
@@ -610,7 +577,7 @@ function syncDiagram(shouldFit = false) {
     if (statusEl) {
       statusEl.className = "";
       if (diagnostics.length > 0) {
-        statusEl.textContent = `Synced — ${diagnostics.length} issue(s) found (check F12 Console for LLM repair prompt).`;
+        statusEl.textContent = `Synced — ${diagnostics.length} issue(s) found (check Console).`;
       } else if (warnings.length > 0) {
         statusEl.textContent = `Valid C-Tree (${leafIds.size} tip[s]) — ${warnings[0]}`;
       } else {
@@ -621,42 +588,24 @@ function syncDiagram(shouldFit = false) {
     CKReporter.logToConsole([], [], err);
     if (statusEl) {
       statusEl.className = "error";
-      statusEl.textContent = "JSON Syntax Error (see Console): " + err.message;
+      statusEl.textContent = "JSON Syntax Error: " + err.message;
     }
   }
 }
-
-editorEl.addEventListener("input", () => syncDiagram(false));
-
-if (resetBtn) {
-  resetBtn.addEventListener("click", () => {
-    PositionStore.clear();
-    syncDiagram(true);
-    if (statusEl) statusEl.textContent = "Reset positions & fitted entire diagram.";
-  });
-}
-
-window.addEventListener("resize", () => {
-  cy.resize();
-  syncBackdropDivider();
-});
 
 // ============================================================================
 // LAYER 4: COMPRESSION, TUPLE-PACKING & URL SYNC
 // ============================================================================
 const URLSync = {
-  // 1. Tuple Packing Trick: Strips all JSON keys to maximize compression
   pack(domain, coords) {
     const c = (domain.concepts || []).map(n => [n.id, n.label || "", n.partition || ""]);
     const k = (domain.knowledge || []).map(n => [n.id, n.label || "", n.status || ""]);
     const l = (domain.links || []).map(n => [n.from, n.to]);
-    // Save coordinate positions (rounding to save bytes)
     const p = Object.keys(coords).map(id => [id, Math.round(coords[id].x), Math.round(coords[id].y)]);
     
     return [domain.rootId || "", c, k, l, p];
   },
 
-  // 1b. Unpacking from Tuple Arrays back to normal JSON
   unpack(packed) {
     const [rootId, c, k, l, p] = packed;
     const domain = {
@@ -670,20 +619,17 @@ const URLSync = {
     return { domain, coords };
   },
 
-  // 2. Native CompressionStream (Deflate) -> URL Safe Base64
   async compress(jsonString) {
     const stream = new Blob([jsonString]).stream().pipeThrough(new CompressionStream('deflate-raw'));
     const buffer = await new Response(stream).arrayBuffer();
     const bytes = new Uint8Array(buffer);
     const binString = Array.from(bytes, byte => String.fromCharCode(byte)).join("");
-    // Replace URL-unsafe chars in Base64
     return btoa(binString).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
   },
 
-  // 2b. URL Safe Base64 -> Native DecompressionStream
   async decompress(base64Str) {
     let b64 = base64Str.replace(/-/g, '+').replace(/_/g, '/');
-    while (b64.length % 4) b64 += '='; // Restore padding
+    while (b64.length % 4) b64 += '=';
     const binString = atob(b64);
     const bytes = Uint8Array.from(binString, m => m.codePointAt(0));
     
@@ -691,7 +637,6 @@ const URLSync = {
     return await new Response(stream).text();
   },
 
-  // 3. Attach to #export button & Generate URL
   async exportToUrl() {
     try {
       if (statusEl) {
@@ -724,7 +669,6 @@ const URLSync = {
     }
   },
 
-  // 4. On Page Load, check hash & initialize
   async loadFromUrl() {
     const hash = window.location.hash.substring(1);
     if (!hash) return false;
@@ -734,10 +678,8 @@ const URLSync = {
       const packed = JSON.parse(jsonStr);
       const { domain, coords } = this.unpack(packed);
 
-      // Inject parsed domain back into the editor
-      editorEl.value = JSON.stringify(domain, null, 2);
+      if (editorEl) editorEl.value = JSON.stringify(domain, null, 2);
 
-      // Save retrieved coords to local storage
       PositionStore.clear();
       Object.entries(coords).forEach(([id, pos]) => PositionStore.save(id, pos));
 
@@ -759,13 +701,32 @@ const URLSync = {
   }
 };
 
-// Wire up the export button dynamically
+// ============================================================================
+// EVENT LISTENERS & INITIALIZATION (Bound at the very end)
+// ============================================================================
+
+if (editorEl) {
+  editorEl.addEventListener("input", () => syncDiagram(false));
+}
+
+if (resetBtn) {
+  resetBtn.addEventListener("click", () => {
+    PositionStore.clear();
+    syncDiagram(true);
+    if (statusEl) statusEl.textContent = "Reset positions & fitted entire diagram.";
+  });
+}
+
+window.addEventListener("resize", () => {
+  cy.resize();
+  syncBackdropDivider();
+});
+
 const exportBtn = document.getElementById("export");
 if (exportBtn) {
   exportBtn.addEventListener("click", () => URLSync.exportToUrl());
 }
 
-// Initializer: Priority 1 is URL Hash, Fallback is standard load
 window.addEventListener("DOMContentLoaded", async () => {
   const loadedFromHash = await URLSync.loadFromUrl();
   if (!loadedFromHash) {
