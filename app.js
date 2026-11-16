@@ -1,76 +1,5 @@
 // ============================================================================
-// 1. URL COMPRESSION (The "Share Link" Logic)
-// ============================================================================
-const UrlCompressor = {
-  // Packs the domain + positions into a compressed Base64 string
-  async pack(domain, positions) {
-    // Helper to safely get arrays
-    const getArr = (arr) => Array.isArray(arr) ? arr : [];
-
-    // Minify Concepts: [id, label, partition, x, y]
-    const cTuples = getArr(domain.concepts).map(c => {
-      const p = positions[c.id] || { x: 0, y: 0 };
-      return [c.id, c.label, c.partition || "", Math.round(p.x), Math.round(p.y)];
-    });
-
-    // Minify Knowledge: [id, label, status, x, y]
-    const kTuples = getArr(domain.knowledge).map(k => {
-      const p = positions[k.id] || { x: 0, y: 0 };
-      return [k.id, k.label, k.status || "", Math.round(p.x), Math.round(p.y)];
-    });
-
-    // Minify Links: [from, to]
-    const lTuples = getArr(domain.links).map(l => [l.from, l.to]);
-
-    // Structure: [RootID, Concepts, Knowledge, Links]
-    const minified = [domain.rootId, cTuples, kTuples, lTuples];
-    const jsonStr = JSON.stringify(minified);
-
-    // Browser-native compression (Deflate + Base64)
-    const stream = new Blob([jsonStr]).stream().pipeThrough(new CompressionStream("deflate-raw"));
-    const buffer = await new Response(stream).arrayBuffer();
-    const base64 = btoa(String.fromCharCode(...new Uint8Array(buffer)));
-    
-    // Make URL-safe (replace +/ with -_)
-    return base64.replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
-  },
-
-  // Unpacks the string back into JSON + Positions
-  async unpack(hash) {
-    try {
-      let base64 = hash.replace(/-/g, "+").replace(/_/g, "/");
-      while (base64.length % 4) base64 += "=";
-
-      const binary = atob(base64);
-      const bytes = new Uint8Array(binary.length);
-      for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-
-      const stream = new Blob([bytes]).stream().pipeThrough(new DecompressionStream("deflate-raw"));
-      const decompressed = await new Response(stream).json();
-
-      const [rootId, cTuples, kTuples, lTuples] = decompressed;
-      
-      const domain = {
-        rootId,
-        concepts: cTuples.map(t => ({ id: t[0], label: t[1], partition: t[2] || undefined })),
-        knowledge: kTuples.map(t => ({ id: t[0], label: t[1], status: t[2] || undefined })),
-        links: lTuples.map(t => ({ from: t[0], to: t[1] }))
-      };
-
-      const positions = {};
-      cTuples.forEach(t => positions[t[0]] = { x: t[3], y: t[4] });
-      kTuples.forEach(t => positions[t[0]] = { x: t[3], y: t[4] });
-
-      return { domain, positions };
-    } catch (e) {
-      console.error("Decode Failed:", e);
-      return null;
-    }
-  }
-};
-
-// ============================================================================
-// 2. LOGIC & VALIDATION (The Brains)
+// LAYER 1: PURE C-K VALIDATOR, DIAGNOSTICS & TREE-TIP DETECTOR
 // ============================================================================
 const CKValidator = {
   analyze(domain) {
@@ -79,103 +8,294 @@ const CKValidator = {
     const links = Array.isArray(domain.links) ? domain.links : [];
 
     const spaceMap = new Map();
-    concepts.forEach(c => spaceMap.set(c.id, "C"));
-    knowledge.forEach(k => spaceMap.set(k.id, "K"));
+    const labelMap = new Map();
+    const duplicateIds = [];
 
-    const parentCount = new Map();
+    concepts.forEach((c) => {
+      if (spaceMap.has(c.id)) duplicateIds.push(c.id);
+      spaceMap.set(c.id, "C");
+      labelMap.set(c.id, c.label || c.id);
+    });
+
+    knowledge.forEach((k) => {
+      if (spaceMap.has(k.id)) duplicateIds.push(k.id);
+      spaceMap.set(k.id, "K");
+      labelMap.set(k.id, k.label || k.id);
+    });
+
+    const parentMap = new Map(); // childId -> [parentIds]
     const childCount = new Map();
     const cAdjacency = new Map();
-    concepts.forEach(c => cAdjacency.set(c.id, []));
+    concepts.forEach((c) => {
+      parentMap.set(c.id, []);
+      cAdjacency.set(c.id, []);
+    });
 
-    const typedLinks = links
-      .filter(l => spaceMap.has(l.from) && spaceMap.has(l.to))
-      .map(link => {
-        const fromSpace = spaceMap.get(link.from);
-        const toSpace = spaceMap.get(link.to);
-        const operator = fromSpace + toSpace;
+    let crossSpaceLinkCount = 0;
+    const danglingLinks = [];
+    const typedLinks = [];
 
-        if (operator === "CC") {
-          parentCount.set(link.to, (parentCount.get(link.to) || 0) + 1);
-          childCount.set(link.from, (childCount.get(link.from) || 0) + 1);
-          cAdjacency.get(link.from).push(link.to);
-        }
+    links.forEach((link, index) => {
+      const hasFrom = spaceMap.has(link.from);
+      const hasTo = spaceMap.has(link.to);
 
-        return { id: `${link.from}->${link.to}`, from: link.from, to: link.to, operator };
+      if (!hasFrom || !hasTo) {
+        danglingLinks.push({
+          index,
+          from: link.from,
+          to: link.to,
+          missingFrom: !hasFrom,
+          missingTo: !hasTo
+        });
+        return;
+      }
+
+      const fromSpace = spaceMap.get(link.from);
+      const toSpace = spaceMap.get(link.to);
+      const operator = fromSpace + toSpace;
+
+      if (operator === "CC") {
+        parentMap.get(link.to).push(link.from);
+        childCount.set(link.from, (childCount.get(link.from) || 0) + 1);
+        cAdjacency.get(link.from).push(link.to);
+      }
+      if (operator === "KC" || operator === "CK") {
+        crossSpaceLinkCount++;
+      }
+
+      typedLinks.push({
+        id: `${link.from}->${link.to}`,
+        from: link.from,
+        to: link.to,
+        operator
       });
+    });
 
-    // Cycle Detection
-    const state = new Map(); // 0:unvisited, 1:visiting, 2:visited
-    const inCycle = new Set();
-    
+    // 3-color DFS cycle detection inside C-Space with exact cycle path capture
+    const state = new Map();
+    const inCycle = new Map(); // nodeId -> cyclePath string
+
     function dfsCycle(nodeId, stack) {
       state.set(nodeId, 1);
       stack.push(nodeId);
-      
+
       const neighbors = cAdjacency.get(nodeId) || [];
       for (const nextId of neighbors) {
         const nextState = state.get(nextId) || 0;
         if (nextState === 0) {
           dfsCycle(nextId, stack);
         } else if (nextState === 1) {
-          // Cycle found
           const loopStart = stack.indexOf(nextId);
-          for (let i = loopStart; i < stack.length; i++) inCycle.add(stack[i]);
+          const loopNodes = stack.slice(loopStart).concat(nextId);
+          const loopPath = loopNodes.join(" -> ");
+          for (let i = loopStart; i < stack.length; i++) {
+            inCycle.set(stack[i], loopPath);
+          }
         }
       }
+
       stack.pop();
       state.set(nodeId, 2);
     }
-    
-    concepts.forEach(c => {
+
+    concepts.forEach((c) => {
       if (!state.get(c.id)) dfsCycle(c.id, []);
     });
 
-    const violations = {};
+    const violations = {}; // Short UI badge strings per nodeId
+    const diagnostics = []; // Detailed LLM-ready error objects
     const leafIds = new Set();
 
-    concepts.forEach(c => {
-      const errs = [];
-      const parents = parentCount.get(c.id) || 0;
-      const children = childCount.get(c.id) || 0;
+    // Global schema checks
+    if (!domain.rootId || !spaceMap.has(domain.rootId)) {
+      diagnostics.push({
+        code: "MISSING_OR_INVALID_ROOT",
+        nodeId: domain.rootId || null,
+        problem: `domain.rootId ("${domain.rootId}") does not match any Concept ID in concepts[].`,
+        fix: `Set "rootId" to the top-level Concept ID (e.g., "${concepts[0]?.id || "c0"}").`
+      });
+    }
 
-      if (c.id === domain.rootId && parents > 0) errs.push("Root cannot have C-Parent");
-      if (c.id !== domain.rootId && parents === 0) errs.push("Orphan Concept");
-      if (parents > 1) errs.push("Tree Violation (>1 Parent)");
-      if (inCycle.has(c.id)) errs.push("Cycle Detected");
-
-      if (errs.length > 0) violations[c.id] = errs;
-      else if (children === 0 && c.id !== domain.rootId) leafIds.add(c.id);
+    duplicateIds.forEach((dupId) => {
+      diagnostics.push({
+        code: "DUPLICATE_NODE_ID",
+        nodeId: dupId,
+        problem: `Node ID "${dupId}" is declared more than once across concepts[] or knowledge[].`,
+        fix: `Rename duplicate "${dupId}" so every Concept and Knowledge item has a unique "id".`
+      });
     });
 
-    return { typedLinks, violations, leafIds };
+    danglingLinks.forEach((dl) => {
+      const missingParts = [];
+      if (dl.missingFrom) missingParts.push(`source "${dl.from}"`);
+      if (dl.missingTo) missingParts.push(`target "${dl.to}"`);
+      diagnostics.push({
+        code: "DANGLING_LINK_REFERENCE",
+        linkIndex: dl.index,
+        link: { from: dl.from, to: dl.to },
+        problem: `links[${dl.index}] ({ "from": "${dl.from}", "to": "${dl.to}" }) references non-existent ${missingParts.join(" and ")}.`,
+        fix: `Either add the missing node(s) to concepts[]/knowledge[] or remove/fix links[${dl.index}].`
+      });
+    });
+
+    // Per-Concept C-K rule checks
+    concepts.forEach((c) => {
+      const uiErrs = [];
+      const parents = parentMap.get(c.id) || [];
+      const children = childCount.get(c.id) || 0;
+
+      if (c.id === domain.rootId && parents.length > 0) {
+        uiErrs.push("Root Has C-Parent");
+        diagnostics.push({
+          code: "ROOT_HAS_CONCEPT_PARENT",
+          nodeId: c.id,
+          label: labelMap.get(c.id),
+          offendingParents: parents,
+          problem: `Root concept "${c.id}" ("${labelMap.get(c.id)}") has incoming C->C link(s) from [${parents.map((p) => `"${p}"`).join(", ")}]. In C-K theory, rootId is the origin of C-Space and cannot have a Concept parent.`,
+          fix: `Remove link(s) ${parents.map((p) => `{ "from": "${p}", "to": "${c.id}" }`).join(", ")} from links[], or change "rootId".`
+        });
+      }
+
+      if (c.id !== domain.rootId && parents.length === 0) {
+        uiErrs.push("Orphan Concept");
+        diagnostics.push({
+          code: "ORPHAN_CONCEPT",
+          nodeId: c.id,
+          label: labelMap.get(c.id),
+          problem: `Non-root Concept "${c.id}" ("${labelMap.get(c.id)}") has 0 incoming C->C links. C-Space must form a single connected tree rooted at "${domain.rootId}". (Note: K->C links alone do not satisfy C-tree lineage).`,
+          fix: `Add a parent C->C link in links[], e.g., { "from": "${domain.rootId || "c0"}", "to": "${c.id}" }, or remove "${c.id}" if unneeded.`
+        });
+      }
+
+      if (parents.length > 1) {
+        uiErrs.push("Tree Violation (>1 C-Parent)");
+        diagnostics.push({
+          code: "MULTIPLE_CONCEPT_PARENTS",
+          nodeId: c.id,
+          label: labelMap.get(c.id),
+          offendingParents: parents,
+          problem: `Concept "${c.id}" ("${labelMap.get(c.id)}") has ${parents.length} Concept parents: [${parents.map((p) => `"${p}"`).join(", ")}]. C-Space is strictly a hierarchical set-partition tree and forbids merging branches.`,
+          fix: `Keep only ONE C->C link pointing to "${c.id}" and delete the extra link(s) from [${parents.map((p) => `"${p}"`).join(", ")}].`
+        });
+      }
+
+      if (inCycle.has(c.id)) {
+        const cyclePath = inCycle.get(c.id);
+        uiErrs.push("Cycle in C-Space");
+        diagnostics.push({
+          code: "CONCEPT_CYCLE_DETECTED",
+          nodeId: c.id,
+          label: labelMap.get(c.id),
+          cyclePath,
+          problem: `Concept "${c.id}" is part of a directed C->C loop (${cyclePath}). Set partitions in C-Space must be strictly acyclic.`,
+          fix: `Break the loop (${cyclePath}) by removing the back-edge in links[] that points back to an ancestor Concept.`
+        });
+      }
+
+      if (uiErrs.length > 0) {
+        violations[c.id] = uiErrs;
+      } else if (children === 0 && c.id !== domain.rootId) {
+        leafIds.add(c.id);
+      }
+    });
+
+    const warnings = [];
+    if (concepts.length > 1 && crossSpaceLinkCount === 0) {
+      warnings.push("Pure C-brainstorming so far (0 K<->C links between spaces).");
+    }
+
+    return { typedLinks, violations, diagnostics, leafIds, warnings };
   }
 };
 
 // ============================================================================
-// 3. LAYOUT & STORAGE (The Positioning System)
+// LAYER 1B: CONSOLE REPORTER FOR LLM DEBUGGING PROMPTS
 // ============================================================================
-const COORD_KEY = "ck_coords_v4";
+const CKReporter = {
+  lastSignature: "",
+
+  logToConsole(diagnostics, warnings, syntaxError = null) {
+    const signature = syntaxError
+      ? `SYNTAX:${syntaxError.message}`
+      : JSON.stringify({ diagnostics, warnings });
+
+    if (signature === this.lastSignature) return;
+    this.lastSignature = signature;
+
+    if (syntaxError) {
+      const llmSyntaxReport = [
+        "[C-K ENGINE LLM ERROR REPORT — JSON SYNTAX FAILURE]",
+        `Error Message: ${syntaxError.message}`,
+        "Action Required: Fix the malformed JSON syntax (check trailing commas, unquoted keys, or missing brackets) while keeping rootId, concepts[], knowledge[], and links[] intact."
+      ].join("\n");
+
+      console.error(llmSyntaxReport);
+      return;
+    }
+
+    if (diagnostics.length === 0) {
+      console.info(
+        `%c[C-K Validator] VALID MODEL — 0 structural violations.${warnings.length ? " Note: " + warnings.join(" ") : ""}`,
+        "color: #16a34a; font-weight: bold;"
+      );
+      return;
+    }
+
+    const lines = [
+      `[C-K MODEL VALIDATION ERRORS — ${diagnostics.length} ISSUE(S) FOUND]`,
+      "Please fix the C-K JSON according to the following specific node/link violations:\n"
+    ];
+
+    diagnostics.forEach((d, idx) => {
+      const targetTag = d.nodeId
+        ? `Node "${d.nodeId}"${d.label ? ` ("${d.label}")` : ""}`
+        : `Link #${d.linkIndex} (${d.link?.from} -> ${d.link?.to})`;
+
+      lines.push(`${idx + 1}. [${d.code}] on ${targetTag}`);
+      lines.push(`   - Why it fails: ${d.problem}`);
+      lines.push(`   - How to fix in JSON: ${d.fix}`);
+    });
+
+    if (warnings.length > 0) {
+      lines.push(`\nMethodological Notes (Non-fatal): ${warnings.join(" | ")}`);
+    }
+
+    const llmPayload = lines.join("\n");
+
+    console.group(`%c[C-K Validator] ${diagnostics.length} Violation(s) — Copy block below for LLM repair`, "color: #dc2626; font-weight: bold;");
+    console.error(llmPayload);
+    console.table(
+      diagnostics.map((d) => ({
+        Code: d.code,
+        Target: d.nodeId || `${d.link?.from}->${d.link?.to}`,
+        Problem: d.problem,
+        Suggested_Fix: d.fix
+      }))
+    );
+    console.groupEnd();
+  }
+};
+
+// ============================================================================
+// LAYER 2: COORDINATE STORE & WORLD-SPACE TWO-COLUMN LAYOUT
+// ============================================================================
+const COORD_STORAGE_KEY = "ck_world_positions_v3";
 
 const PositionStore = {
-  data: {},
   load() {
-    if (Object.keys(this.data).length > 0) return this.data;
     try {
-      this.data = JSON.parse(localStorage.getItem(COORD_KEY)) || {};
-      return this.data;
-    } catch { return {}; }
+      return JSON.parse(localStorage.getItem(COORD_STORAGE_KEY)) || {};
+    } catch {
+      return {};
+    }
   },
   save(id, pos) {
-    this.data[id] = { x: Math.round(pos.x), y: Math.round(pos.y) };
-    localStorage.setItem(COORD_KEY, JSON.stringify(this.data));
-  },
-  import(newPositions) {
-    this.data = newPositions;
-    localStorage.setItem(COORD_KEY, JSON.stringify(this.data));
+    const store = this.load();
+    store[id] = { x: Math.round(pos.x), y: Math.round(pos.y) };
+    localStorage.setItem(COORD_STORAGE_KEY, JSON.stringify(store));
   },
   clear() {
-    this.data = {};
-    localStorage.removeItem(COORD_KEY);
+    localStorage.removeItem(COORD_STORAGE_KEY);
   }
 };
 
@@ -186,53 +306,57 @@ const LayoutEngine = {
     const knowledge = Array.isArray(domain.knowledge) ? domain.knowledge : [];
     const links = Array.isArray(domain.links) ? domain.links : [];
 
-    // Calculate depth for auto-layout
     const childrenMap = new Map();
-    links.forEach(l => {
-      if (!childrenMap.has(l.from)) childrenMap.set(l.from, []);
-      childrenMap.get(l.from).push(l.to);
+    concepts.forEach((c) => childrenMap.set(c.id, []));
+    links.forEach((l) => {
+      if (childrenMap.has(l.from) && childrenMap.has(l.to)) {
+        childrenMap.get(l.from).push(l.to);
+      }
     });
 
     const depthMap = new Map();
-    if (domain.rootId) {
+    if (domain.rootId && childrenMap.has(domain.rootId)) {
       const queue = [{ id: domain.rootId, depth: 0 }];
       depthMap.set(domain.rootId, 0);
-      
       while (queue.length > 0) {
         const curr = queue.shift();
         const kids = childrenMap.get(curr.id) || [];
-        kids.forEach(kidId => {
-          if (!depthMap.has(kidId)) {
-            depthMap.set(kidId, curr.depth + 1);
-            queue.push({ id: kidId, depth: curr.depth + 1 });
+        for (const childId of kids) {
+          if (!depthMap.has(childId)) {
+            depthMap.set(childId, curr.depth + 1);
+            queue.push({ id: childId, depth: curr.depth + 1 });
           }
-        });
+        }
       }
     }
 
     const levelCounts = new Map();
-
-    // Assign Concept Positions
-    concepts.forEach(c => {
+    concepts.forEach((c) => {
       if (savedPositions[c.id]) {
         coords[c.id] = savedPositions[c.id];
-      } else {
-        const d = depthMap.get(c.id) || 0;
-        const idx = levelCounts.get(d) || 0;
-        levelCounts.set(d, idx + 1);
-        // "C" nodes go on the LEFT (negative X)
-        coords[c.id] = { x: -250 - (idx * 220), y: 100 + (d * 140) };
+        return;
       }
+      const d = depthMap.has(c.id) ? depthMap.get(c.id) : 0;
+      const idxInLevel = levelCounts.get(d) || 0;
+      levelCounts.set(d, idxInLevel + 1);
+
+      coords[c.id] = {
+        x: -260 - idxInLevel * 240,
+        y: 100 + d * 130
+      };
     });
 
-    // Assign Knowledge Positions
     knowledge.forEach((k, idx) => {
       if (savedPositions[k.id]) {
         coords[k.id] = savedPositions[k.id];
-      } else {
-        // "K" nodes go on the RIGHT (positive X)
-        coords[k.id] = { x: 250 + ((idx % 3) * 220), y: 100 + (Math.floor(idx / 3) * 140) };
+        return;
       }
+      const col = idx % 2;
+      const row = Math.floor(idx / 2);
+      coords[k.id] = {
+        x: 240 + col * 240,
+        y: 100 + row * 120
+      };
     });
 
     return coords;
@@ -240,206 +364,411 @@ const LayoutEngine = {
 };
 
 // ============================================================================
-// 4. UI INITIALIZATION (The Glue)
+// LAYER 3: FAST ZOOM CANVAS RENDERER & FLOATING CONTROLS
 // ============================================================================
 const editorEl = document.getElementById("json-editor");
 const statusEl = document.getElementById("status-bar");
 const resetBtn = document.getElementById("reset-coords-btn");
-const canvasEl = document.getElementById("ck-canvas");
 const canvasWrapEl = document.getElementById("canvas-wrap");
-const cColEl = document.querySelector(".c-col"); // The blue backdrop
+const canvasEl = document.getElementById("ck-canvas");
+const cColEl = document.querySelector(".c-col");
 
-// Add Export Button to Toolbar
-const toolbar = document.getElementById("toolbar");
-if (!document.getElementById("export-btn")) {
-  const btn = document.createElement("button");
-  btn.id = "export-btn";
-  btn.textContent = "🔗 Copy Link";
-  btn.style.cssText = "margin-left: 10px; background: #8b5cf6; color: white; border: none; padding: 5px 10px; border-radius: 4px; cursor: pointer;";
-  toolbar.appendChild(btn);
-  
-  btn.addEventListener("click", async () => {
-    try {
-      const domain = JSON.parse(editorEl.value);
-      const positions = PositionStore.load();
-      const hash = await UrlCompressor.pack(domain, positions);
-      
-      const newUrl = `${window.location.origin}${window.location.pathname}#ck=${hash}`;
-      history.pushState(null, null, newUrl);
-      await navigator.clipboard.writeText(newUrl);
-      
-      const oldText = btn.textContent;
-      btn.textContent = "✅ Copied!";
-      btn.style.background = "#22c55e";
-      setTimeout(() => { btn.textContent = oldText; btn.style.background = "#8b5cf6"; }, 2000);
-    } catch (e) {
-      alert("Error exporting: " + e.message);
-    }
-  });
-}
-
-// Cytoscape Setup
 const cy = cytoscape({
   container: canvasEl,
+  userPanningEnabled: true,
+  userZoomingEnabled: true,
+  boxSelectionEnabled: false,
   minZoom: 0.1,
-  maxZoom: 3.0,
-  wheelSensitivity: 0.4,
+  maxZoom: 4.0,
+  wheelSensitivity: 2.5,
+  pixelRatio: Math.min(window.devicePixelRatio || 1, 2),
   style: [
     {
       selector: "node",
       style: {
         "label": "data(displayLabel)",
         "text-wrap": "wrap",
-        "text-max-width": "180px",
+        "text-max-width": "175px",
         "text-valign": "center",
         "text-halign": "center",
         "font-size": "12px",
-        "color": "#1e293b",
+        "color": "#0f172a",
         "shape": "round-rectangle",
         "width": 200,
-        "height": 70,
+        "height": 72,
         "background-color": "#eff6ff",
         "border-width": 2,
-        "border-color": "#60a5fa"
+        "border-color": "#3b82f6"
       }
     },
-    { selector: "node[?isRoot]", style: { "background-color": "#dbeafe", "border-width": 4, "border-color": "#2563eb", "font-weight": "bold" } },
-    { selector: "node[space='K']", style: { "background-color": "#f0fdf4", "border-color": "#4ade80", "shape": "cut-rectangle" } },
-    { selector: "node[?hasViolation]", style: { "background-color": "#fef2f2", "border-color": "#ef4444", "border-width": 3 } },
-    { selector: "edge", style: { "width": 2, "curve-style": "bezier", "target-arrow-shape": "triangle", "line-color": "#94a3b8", "target-arrow-color": "#94a3b8" } },
-    { selector: "edge[operator='KC'], edge[operator='CK']", style: { "line-style": "dashed", "line-color": "#a855f7", "target-arrow-color": "#a855f7" } }
+    {
+      selector: "node[?isRoot]",
+      style: {
+        "background-color": "#dbeafe",
+        "border-color": "#1d4ed8",
+        "border-width": 3,
+        "font-weight": "bold"
+      }
+    },
+    {
+      selector: "node[?isLeaf]",
+      style: {
+        "shape": "barrel",
+        "background-color": "#fffbeb",
+        "border-color": "#d97706",
+        "border-width": 3
+      }
+    },
+    {
+      selector: 'node[space = "K"]',
+      style: {
+        "shape": "rectangle",
+        "background-color": "#f0fdf4",
+        "border-color": "#22c55e"
+      }
+    },
+    {
+      selector: "node[?hasViolation]",
+      style: {
+        "shape": "round-rectangle",
+        "background-color": "#fef2f2",
+        "border-color": "#ef4444",
+        "border-width": 3
+      }
+    },
+    {
+      selector: "edge",
+      style: {
+        "width": 2,
+        "curve-style": "bezier",
+        "target-arrow-shape": "triangle",
+        "line-color": "#64748b",
+        "target-arrow-color": "#64748b"
+      }
+    },
+    {
+      selector: 'edge[operator = "KC"], edge[operator = "CK"]',
+      style: {
+        "line-style": "dashed",
+        "line-color": "#9333ea",
+        "target-arrow-color": "#9333ea"
+      }
+    }
   ]
 });
 
-// Zoom Controls
-(function addZoomControls() {
-  if (document.getElementById("zoom-controls")) return;
-  const div = document.createElement("div");
-  div.id = "zoom-controls";
-  div.style.cssText = "position:absolute; bottom:20px; right:20px; display:flex; gap:5px; z-index:100;";
-  
-  const mkBtn = (txt, fn) => {
-    const b = document.createElement("button");
-    b.textContent = txt;
-    b.onclick = fn;
-    b.style.cssText = "width:30px; height:30px; background:#334155; color:white; border:none; border-radius:4px; cursor:pointer; font-weight:bold;";
-    return b;
-  };
+function zoomByFactor(factor) {
+  const rect = canvasEl.getBoundingClientRect();
+  const nextZoom = Math.max(cy.minZoom(), Math.min(cy.maxZoom(), cy.zoom() * factor));
+  cy.zoom({
+    level: nextZoom,
+    renderedPosition: { x: rect.width / 2, y: rect.height / 2 }
+  });
+}
 
-  div.append(
-    mkBtn("+", () => cy.zoom({ level: cy.zoom() * 1.2, renderedPosition: { x: cy.width()/2, y: cy.height()/2 } })),
-    mkBtn("-", () => cy.zoom({ level: cy.zoom() / 1.2, renderedPosition: { x: cy.width()/2, y: cy.height()/2 } })),
-    mkBtn("Fit", () => cy.fit(undefined, 50))
-  );
-  canvasWrapEl.appendChild(div);
+function fitAllNodes() {
+  if (cy.elements().length > 0) {
+    cy.fit(cy.elements(), 60);
+  }
+}
+
+(function setupZoomControls() {
+  let zoomInBtn = document.getElementById("zoom-in-btn");
+  let zoomOutBtn = document.getElementById("zoom-out-btn");
+  let fitBtn = document.getElementById("fit-btn") || document.getElementById("fit-all-btn");
+
+  if (!zoomInBtn && !zoomOutBtn && !fitBtn && canvasWrapEl) {
+    const bar = document.createElement("div");
+    bar.style.cssText =
+      "position:absolute;bottom:18px;right:18px;z-index:20;display:flex;gap:6px;" +
+      "background:#0f172a;padding:6px;border-radius:8px;box-shadow:0 4px 12px rgba(0,0,0,0.2);";
+
+    const btnCss =
+      "background:#334155;color:#fff;border:none;padding:7px 12px;border-radius:5px;" +
+      "cursor:pointer;font-size:13px;font-weight:700;user-select:none;";
+
+    zoomInBtn = document.createElement("button");
+    zoomInBtn.type = "button";
+    zoomInBtn.textContent = "+";
+    zoomInBtn.title = "Zoom In";
+    zoomInBtn.style.cssText = btnCss;
+
+    zoomOutBtn = document.createElement("button");
+    zoomOutBtn.type = "button";
+    zoomOutBtn.textContent = "-";
+    zoomOutBtn.title = "Zoom Out";
+    zoomOutBtn.style.cssText = btnCss;
+
+    fitBtn = document.createElement("button");
+    fitBtn.type = "button";
+    fitBtn.textContent = "Fit All";
+    fitBtn.title = "Fit Entire Diagram";
+    fitBtn.style.cssText = btnCss + "background:#3b82f6;";
+
+    bar.append(zoomInBtn, zoomOutBtn, fitBtn);
+    canvasWrapEl.appendChild(bar);
+  }
+
+  if (zoomInBtn) zoomInBtn.addEventListener("click", () => zoomByFactor(1.35));
+  if (zoomOutBtn) zoomOutBtn.addEventListener("click", () => zoomByFactor(1 / 1.35));
+  if (fitBtn) fitBtn.addEventListener("click", fitAllNodes);
 })();
 
-// Sync Logic
+function syncBackdropDivider() {
+  if (!cColEl) return;
+  const screenDividerX = cy.pan().x;
+  const totalW = canvasEl.clientWidth || 1;
+  const clampedPct = Math.max(0, Math.min(100, (screenDividerX / totalW) * 100));
+  cColEl.style.flex = `0 0 ${clampedPct}%`;
+}
+
+cy.on("pan zoom resize", syncBackdropDivider);
+
+cy.on("drag", "node", (evt) => {
+  const node = evt.target;
+  const pos = node.position();
+  const margin = 120;
+
+  if (node.data("space") === "C" && pos.x > -margin) {
+    node.position("x", -margin);
+  } else if (node.data("space") === "K" && pos.x < margin) {
+    node.position("x", margin);
+  }
+});
+
+cy.on("dragfree", "node", (evt) => {
+  const node = evt.target;
+  PositionStore.save(node.id(), node.position());
+  if (statusEl) {
+    statusEl.className = "";
+    statusEl.textContent = `Saved "${node.id()}" coordinates.`;
+  }
+});
+
 function syncDiagram(shouldFit = false) {
   try {
-    const jsonStr = editorEl.value.trim();
-    if (!jsonStr) return; // Don't parse empty string
+    const domain = JSON.parse(editorEl.value);
+    const { typedLinks, violations, diagnostics, leafIds, warnings } = CKValidator.analyze(domain);
 
-    const domain = JSON.parse(jsonStr);
-    const { typedLinks, violations, leafIds } = CKValidator.analyze(domain);
+    CKReporter.logToConsole(diagnostics, warnings, null);
+
     const coords = LayoutEngine.compute(domain, PositionStore.load());
+    const concepts = Array.isArray(domain.concepts) ? domain.concepts : [];
+    const knowledge = Array.isArray(domain.knowledge) ? domain.knowledge : [];
 
-    const elements = [];
+    const elements = [
+      ...concepts.map((c) => {
+        const errs = violations[c.id];
+        const isLeaf = leafIds.has(c.id);
+        const isRoot = c.id === domain.rootId;
+        const metaTag = c.partition ? ` (${c.partition})` : "";
+        const tipBadge = isLeaf ? " ★ TIP" : "";
 
-    // Add Concepts
-    (Array.isArray(domain.concepts) ? domain.concepts : []).forEach(c => {
-      const errs = violations[c.id];
-      const isLeaf = leafIds.has(c.id);
-      let label = c.label;
-      if (c.partition) label += `\n(${c.partition})`;
-      if (errs) label += `\n⚠ ${errs.join(", ")}`;
-      else if (isLeaf) label += `\n★ Tip`;
-
-      elements.push({
-        data: {
-          id: c.id,
-          space: "C",
-          isRoot: c.id === domain.rootId,
-          hasViolation: !!errs,
-          displayLabel: label
-        },
-        position: coords[c.id]
-      });
-    });
-
-    // Add Knowledge
-    (Array.isArray(domain.knowledge) ? domain.knowledge : []).forEach(k => {
-      elements.push({
+        return {
+          data: {
+            id: c.id,
+            space: "C",
+            isRoot,
+            isLeaf,
+            hasViolation: Boolean(errs),
+            displayLabel: errs
+              ? `${c.label}${metaTag}\n⚠ ${errs.join(", ")}`
+              : `${c.label}${metaTag}${tipBadge}`
+          },
+          position: coords[c.id]
+        };
+      }),
+      ...knowledge.map((k) => ({
         data: {
           id: k.id,
           space: "K",
+          isRoot: false,
+          isLeaf: false,
+          hasViolation: false,
           displayLabel: `${k.label}\n[${k.status || "info"}]`
         },
         position: coords[k.id]
-      });
-    });
-
-    // Add Links
-    typedLinks.forEach(l => {
-      elements.push({
-        data: { id: l.id, source: l.from, target: l.to, operator: l.operator }
-      });
-    });
+      })),
+      ...typedLinks.map((l) => ({
+        data: {
+          id: l.id,
+          source: l.from,
+          target: l.to,
+          operator: l.operator
+        }
+      }))
+    ];
 
     cy.batch(() => {
       cy.elements().remove();
       cy.add(elements);
     });
 
-    if (shouldFit) cy.fit(undefined, 50);
-    updateBackdrop();
+    if (shouldFit) fitAllNodes();
+    syncBackdropDivider();
 
-    const errCount = Object.keys(violations).length;
-    statusEl.textContent = errCount > 0 
-      ? `Synced with ${errCount} violation(s).` 
-      : "Synced and Valid.";
-    statusEl.className = errCount > 0 ? "error" : "";
-
+    if (statusEl) {
+      statusEl.className = "";
+      if (diagnostics.length > 0) {
+        statusEl.textContent = `Synced — ${diagnostics.length} issue(s) found (check F12 Console for LLM repair prompt).`;
+      } else if (warnings.length > 0) {
+        statusEl.textContent = `Valid C-Tree (${leafIds.size} tip[s]) — ${warnings[0]}`;
+      } else {
+        statusEl.textContent = `Synced — Valid (${leafIds.size} tip[s]).`;
+      }
+    }
   } catch (err) {
-    statusEl.textContent = "JSON Syntax Error";
-    statusEl.className = "error";
+    CKReporter.logToConsole([], [], err);
+    if (statusEl) {
+      statusEl.className = "error";
+      statusEl.textContent = "JSON Syntax Error (see Console): " + err.message;
+    }
   }
 }
 
-// Backdrop Sync
-function updateBackdrop() {
-  if (!cColEl) return;
-  const panX = cy.pan().x;
-  // Simple heuristic: map panX to percentage for the split bg
-  const pct = Math.max(0, Math.min(100, (panX / canvasEl.clientWidth) * 100));
-  cColEl.style.flex = `0 0 ${pct}%`;
+editorEl.addEventListener("input", () => syncDiagram(false));
+
+if (resetBtn) {
+  resetBtn.addEventListener("click", () => {
+    PositionStore.clear();
+    syncDiagram(true);
+    if (statusEl) statusEl.textContent = "Reset positions & fitted entire diagram.";
+  });
 }
 
-// Event Listeners
-cy.on("pan zoom", updateBackdrop);
-cy.on("dragfree", "node", (e) => PositionStore.save(e.target.id(), e.target.position()));
-
-editorEl.addEventListener("input", () => syncDiagram(false));
-resetBtn.addEventListener("click", () => { PositionStore.clear(); syncDiagram(true); });
+window.addEventListener("resize", () => {
+  cy.resize();
+  syncBackdropDivider();
+});
 
 // ============================================================================
-// 5. BOOTSTRAP (Load Data)
+// LAYER 4: COMPRESSION, TUPLE-PACKING & URL SYNC
 // ============================================================================
-(async function init() {
-  const hash = window.location.hash;
-  
-  if (hash.startsWith("#ck=")) {
-    // 1. Load from URL Share Link
-    const raw = hash.substring(4);
-    const result = await UrlCompressor.unpack(raw);
-    if (result) {
-      editorEl.value = JSON.stringify(result.domain, null, 2);
-      PositionStore.import(result.positions);
-      statusEl.textContent = "Loaded from shared link.";
+const URLSync = {
+  // 1. Tuple Packing Trick: Strips all JSON keys to maximize compression
+  pack(domain, coords) {
+    const c = (domain.concepts || []).map(n => [n.id, n.label || "", n.partition || ""]);
+    const k = (domain.knowledge || []).map(n => [n.id, n.label || "", n.status || ""]);
+    const l = (domain.links || []).map(n => [n.from, n.to]);
+    // Save coordinate positions (rounding to save bytes)
+    const p = Object.keys(coords).map(id => [id, Math.round(coords[id].x), Math.round(coords[id].y)]);
+    
+    return [domain.rootId || "", c, k, l, p];
+  },
+
+  // 1b. Unpacking from Tuple Arrays back to normal JSON
+  unpack(packed) {
+    const [rootId, c, k, l, p] = packed;
+    const domain = {
+      rootId,
+      concepts: c.map(n => ({ id: n[0], label: n[1], ...(n[2] ? { partition: n[2] } : {}) })),
+      knowledge: k.map(n => ({ id: n[0], label: n[1], ...(n[2] ? { status: n[2] } : {}) })),
+      links: l.map(n => ({ from: n[0], to: n[1] }))
+    };
+    const coords = {};
+    p.forEach(n => { coords[n[0]] = { x: n[1], y: n[2] }; });
+    return { domain, coords };
+  },
+
+  // 2. Native CompressionStream (Deflate) -> URL Safe Base64
+  async compress(jsonString) {
+    const stream = new Blob([jsonString]).stream().pipeThrough(new CompressionStream('deflate-raw'));
+    const buffer = await new Response(stream).arrayBuffer();
+    const bytes = new Uint8Array(buffer);
+    const binString = Array.from(bytes, byte => String.fromCharCode(byte)).join("");
+    // Replace URL-unsafe chars in Base64
+    return btoa(binString).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+  },
+
+  // 2b. URL Safe Base64 -> Native DecompressionStream
+  async decompress(base64Str) {
+    let b64 = base64Str.replace(/-/g, '+').replace(/_/g, '/');
+    while (b64.length % 4) b64 += '='; // Restore padding
+    const binString = atob(b64);
+    const bytes = Uint8Array.from(binString, m => m.codePointAt(0));
+    
+    const stream = new Blob([bytes]).stream().pipeThrough(new DecompressionStream('deflate-raw'));
+    return await new Response(stream).text();
+  },
+
+  // 3. Attach to #export button & Generate URL
+  async exportToUrl() {
+    try {
+      if (statusEl) {
+        statusEl.className = "";
+        statusEl.textContent = "Compressing graph and coordinates...";
+      }
+
+      const domain = JSON.parse(editorEl.value);
+      const coords = PositionStore.load();
+      
+      const packed = this.pack(domain, coords);
+      const jsonStr = JSON.stringify(packed);
+      const hash = await this.compress(jsonStr);
+
+      const newUrl = window.location.pathname + window.location.search + "#" + hash;
+      window.history.replaceState(null, "", newUrl);
+      
+      await navigator.clipboard.writeText(window.location.href);
+
+      if (statusEl) {
+        statusEl.className = "";
+        statusEl.textContent = `Exported! URL copied to clipboard. (Packed size: ${hash.length} chars)`;
+      }
+    } catch (err) {
+      console.error(err);
+      if (statusEl) {
+        statusEl.className = "error";
+        statusEl.textContent = "Export Failed: " + err.message;
+      }
     }
-  } 
-  // 2. Otherwise: We do nothing.
-  // The app will read whatever text is currently inside the HTML <textarea>
-  
-  syncDiagram(true);
-})();
+  },
+
+  // 4. On Page Load, check hash & initialize
+  async loadFromUrl() {
+    const hash = window.location.hash.substring(1);
+    if (!hash) return false;
+
+    try {
+      const jsonStr = await this.decompress(hash);
+      const packed = JSON.parse(jsonStr);
+      const { domain, coords } = this.unpack(packed);
+
+      // Inject parsed domain back into the editor
+      editorEl.value = JSON.stringify(domain, null, 2);
+
+      // Save retrieved coords to local storage
+      PositionStore.clear();
+      Object.entries(coords).forEach(([id, pos]) => PositionStore.save(id, pos));
+
+      syncDiagram(true);
+
+      if (statusEl) {
+        statusEl.className = "";
+        statusEl.textContent = "Loaded diagram and saved coordinates from URL!";
+      }
+      return true;
+    } catch (err) {
+      console.error("Failed to parse URL hash", err);
+      if (statusEl) {
+        statusEl.className = "error";
+        statusEl.textContent = "Failed to load from URL. Hash might be corrupted.";
+      }
+      return false;
+    }
+  }
+};
+
+// Wire up the export button dynamically
+const exportBtn = document.getElementById("export");
+if (exportBtn) {
+  exportBtn.addEventListener("click", () => URLSync.exportToUrl());
+}
+
+// Initializer: Priority 1 is URL Hash, Fallback is standard load
+window.addEventListener("DOMContentLoaded", async () => {
+  const loadedFromHash = await URLSync.loadFromUrl();
+  if (!loadedFromHash) {
+    syncDiagram(true);
+  }
+});
