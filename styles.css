@@ -1,0 +1,201 @@
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  font-family: system-ui, -apple-system, sans-serif;
+  display: flex;
+  height: 100vh;
+  width: 100vw;
+  overflow: hidden;
+  background: #f8fafc;
+}
+
+#sidebar {
+  width: 390px;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  border-right: 2px solid #cbd5e1;
+  background: #1e293b;
+  z-index: 10;
+}
+
+#toolbar {
+  padding: 10px 14px;
+  background: #0f172a;
+  color: #f8fafc;
+  font-size: 13px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+#toolbar button {
+  background: #3b82f6;
+  color: #ffffff;
+  border: none;
+  padding: 6px 10px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+#toolbar button:hover {
+  background: #2563eb;
+}
+
+#json-editor {
+  flex: 1;
+  width: 100%;
+  padding: 14px;
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 13px;
+  line-height: 1.5;
+  border: none;
+  outline: none;
+  resize: none;
+  background: #1e293b;
+  color: #f8fafc;
+}
+
+#status-bar {
+  padding: 8px 14px;
+  font-size: 12px;
+  background: #f1f5f9;
+  color: #334155;
+  border-top: 1px solid #cbd5e1;
+}
+
+#status-bar.error {
+  background: #fee2e2;
+  color: #b91c1c;
+  font-weight: 600;
+}
+
+/* INFINITE CANVAS CONTAINER */
+#canvas-wrap {
+  flex: 1;
+  height: 100%;
+  position: relative;
+  overflow: hidden;
+  background: #f8fafc;
+}
+
+/* World-space C/K split synced to Cytoscape pan/zoom */
+#space-backdrop {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+}
+
+#c-zone-bg {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  background: #f8fafc;
+}
+
+#k-zone-bg {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  right: 0;
+  background: #f2fbf5;
+}
+
+#divider-line {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 0;
+  border-left: 2px dashed #94a3b8;
+}
+
+/* Top Space Indicators */
+#space-badges {
+  position: absolute;
+  top: 12px;
+  left: 16px;
+  right: 16px;
+  display: flex;
+  justify-content: space-between;
+  pointer-events: none;
+  z-index: 3;
+}
+
+.badge {
+  padding: 6px 12px;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.08);
+}
+
+.c-badge {
+  background: #eff6ff;
+  color: #1d4ed8;
+  border: 1px solid #bfdbfe;
+}
+
+.k-badge {
+  background: #dcfce7;
+  color: #15803d;
+  border: 1px solid #bbf7d0;
+}
+
+#ck-canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  z-index: 2;
+}
+
+/* Floating Zoom & Fit Buttons */
+#zoom-controls {
+  position: absolute;
+  bottom: 16px;
+  right: 16px;
+  display: flex;
+  gap: 6px;
+  z-index: 4;
+}
+
+#zoom-controls button {
+  background: #ffffff;
+  color: #0f172a;
+  border: 1px solid #cbd5e1;
+  border-radius: 6px;
+  padding: 8px 12px;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+  box-shadow: 0 2px 5px rgba(15, 23, 42, 0.1);
+}
+
+#zoom-controls button:hover {
+  background: #f1f5f9;
+}
+
+@media (max-width: 768px) {
+  body {
+    flex-direction: column;
+  }
+  #sidebar {
+    width: 100%;
+    height: 40%;
+    border-right: none;
+    border-bottom: 2px solid #cbd5e1;
+  }
+  #canvas-wrap {
+    height: 60%;
+  }
+}
