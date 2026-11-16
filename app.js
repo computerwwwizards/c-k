@@ -23,7 +23,7 @@ const CKValidator = {
       labelMap.set(k.id, k.label || k.id);
     });
 
-    const parentMap = new Map(); // childId -> [parentIds]
+    const parentMap = new Map();
     const childCount = new Map();
     const cAdjacency = new Map();
     concepts.forEach((c) => {
@@ -71,9 +71,8 @@ const CKValidator = {
       });
     });
 
-    // 3-color DFS cycle detection inside C-Space with exact cycle path capture
     const state = new Map();
-    const inCycle = new Map(); // nodeId -> cyclePath string
+    const inCycle = new Map();
 
     function dfsCycle(nodeId, stack) {
       state.set(nodeId, 1);
@@ -102,11 +101,10 @@ const CKValidator = {
       if (!state.get(c.id)) dfsCycle(c.id, []);
     });
 
-    const violations = {}; // Short UI badge strings per nodeId
-    const diagnostics = []; // Detailed LLM-ready error objects
+    const violations = {}; 
+    const diagnostics = [];
     const leafIds = new Set();
 
-    // Global schema checks
     if (!domain.rootId || !spaceMap.has(domain.rootId)) {
       diagnostics.push({
         code: "MISSING_OR_INVALID_ROOT",
@@ -133,12 +131,11 @@ const CKValidator = {
         code: "DANGLING_LINK_REFERENCE",
         linkIndex: dl.index,
         link: { from: dl.from, to: dl.to },
-        problem: `links[${dl.index}] ({ "from": "${dl.from}", "to": "${dl.to}" }) references non-existent ${missingParts.join(" and ")}.`,
+        problem: `links[${dl.index}] references non-existent ${missingParts.join(" and ")}.`,
         fix: `Either add the missing node(s) to concepts[]/knowledge[] or remove/fix links[${dl.index}].`
       });
     });
 
-    // Per-Concept C-K rule checks
     concepts.forEach((c) => {
       const uiErrs = [];
       const parents = parentMap.get(c.id) || [];
@@ -150,9 +147,8 @@ const CKValidator = {
           code: "ROOT_HAS_CONCEPT_PARENT",
           nodeId: c.id,
           label: labelMap.get(c.id),
-          offendingParents: parents,
-          problem: `Root concept "${c.id}" ("${labelMap.get(c.id)}") has incoming C->C link(s) from [${parents.map((p) => `"${p}"`).join(", ")}]. In C-K theory, rootId is the origin of C-Space and cannot have a Concept parent.`,
-          fix: `Remove link(s) ${parents.map((p) => `{ "from": "${p}", "to": "${c.id}" }`).join(", ")} from links[], or change "rootId".`
+          problem: `Root concept "${c.id}" has incoming C->C link(s).`,
+          fix: `Remove link(s) or change "rootId".`
         });
       }
 
@@ -162,8 +158,8 @@ const CKValidator = {
           code: "ORPHAN_CONCEPT",
           nodeId: c.id,
           label: labelMap.get(c.id),
-          problem: `Non-root Concept "${c.id}" ("${labelMap.get(c.id)}") has 0 incoming C->C links. C-Space must form a single connected tree rooted at "${domain.rootId}". (Note: K->C links alone do not satisfy C-tree lineage).`,
-          fix: `Add a parent C->C link in links[], e.g., { "from": "${domain.rootId || "c0"}", "to": "${c.id}" }, or remove "${c.id}" if unneeded.`
+          problem: `Non-root Concept "${c.id}" has 0 incoming C->C links.`,
+          fix: `Add a parent C->C link in links[].`
         });
       }
 
@@ -173,9 +169,8 @@ const CKValidator = {
           code: "MULTIPLE_CONCEPT_PARENTS",
           nodeId: c.id,
           label: labelMap.get(c.id),
-          offendingParents: parents,
-          problem: `Concept "${c.id}" ("${labelMap.get(c.id)}") has ${parents.length} Concept parents: [${parents.map((p) => `"${p}"`).join(", ")}]. C-Space is strictly a hierarchical set-partition tree and forbids merging branches.`,
-          fix: `Keep only ONE C->C link pointing to "${c.id}" and delete the extra link(s) from [${parents.map((p) => `"${p}"`).join(", ")}].`
+          problem: `Concept "${c.id}" has ${parents.length} Concept parents.`,
+          fix: `Keep only ONE C->C link pointing to "${c.id}".`
         });
       }
 
@@ -186,9 +181,8 @@ const CKValidator = {
           code: "CONCEPT_CYCLE_DETECTED",
           nodeId: c.id,
           label: labelMap.get(c.id),
-          cyclePath,
-          problem: `Concept "${c.id}" is part of a directed C->C loop (${cyclePath}). Set partitions in C-Space must be strictly acyclic.`,
-          fix: `Break the loop (${cyclePath}) by removing the back-edge in links[] that points back to an ancestor Concept.`
+          problem: `Concept "${c.id}" is part of a directed C->C loop (${cyclePath}).`,
+          fix: `Break the loop (${cyclePath}) by removing the back-edge.`
         });
       }
 
@@ -213,65 +207,29 @@ const CKValidator = {
 // ============================================================================
 const CKReporter = {
   lastSignature: "",
-
   logToConsole(diagnostics, warnings, syntaxError = null) {
-    const signature = syntaxError
-      ? `SYNTAX:${syntaxError.message}`
-      : JSON.stringify({ diagnostics, warnings });
-
+    const signature = syntaxError ? `SYNTAX:${syntaxError.message}` : JSON.stringify({ diagnostics, warnings });
     if (signature === this.lastSignature) return;
     this.lastSignature = signature;
 
     if (syntaxError) {
-      const llmSyntaxReport = [
-        "[C-K ENGINE LLM ERROR REPORT — JSON SYNTAX FAILURE]",
-        `Error Message: ${syntaxError.message}`,
-        "Action Required: Fix the malformed JSON syntax (check trailing commas, unquoted keys, or missing brackets) while keeping rootId, concepts[], knowledge[], and links[] intact."
-      ].join("\n");
-
-      console.error(llmSyntaxReport);
+      console.error("[C-K ENGINE LLM ERROR REPORT]\nSyntax Error: " + syntaxError.message);
       return;
     }
 
     if (diagnostics.length === 0) {
-      console.info(
-        `%c[C-K Validator] VALID MODEL — 0 structural violations.${warnings.length ? " Note: " + warnings.join(" ") : ""}`,
-        "color: #16a34a; font-weight: bold;"
-      );
+      console.info(`%c[C-K Validator] VALID MODEL — 0 violations.`, "color: #16a34a; font-weight: bold;");
       return;
     }
 
-    const lines = [
-      `[C-K MODEL VALIDATION ERRORS — ${diagnostics.length} ISSUE(S) FOUND]`,
-      "Please fix the C-K JSON according to the following specific node/link violations:\n"
-    ];
-
+    const lines = [`[C-K MODEL VALIDATION ERRORS — ${diagnostics.length} ISSUE(S) FOUND]`];
     diagnostics.forEach((d, idx) => {
-      const targetTag = d.nodeId
-        ? `Node "${d.nodeId}"${d.label ? ` ("${d.label}")` : ""}`
-        : `Link #${d.linkIndex} (${d.link?.from} -> ${d.link?.to})`;
-
-      lines.push(`${idx + 1}. [${d.code}] on ${targetTag}`);
-      lines.push(`   - Why it fails: ${d.problem}`);
-      lines.push(`   - How to fix in JSON: ${d.fix}`);
+      const targetTag = d.nodeId ? `Node "${d.nodeId}"` : `Link #${d.linkIndex}`;
+      lines.push(`${idx + 1}. [${d.code}] on ${targetTag}\n   - Problem: ${d.problem}\n   - Fix: ${d.fix}`);
     });
 
-    if (warnings.length > 0) {
-      lines.push(`\nMethodological Notes (Non-fatal): ${warnings.join(" | ")}`);
-    }
-
-    const llmPayload = lines.join("\n");
-
-    console.group(`%c[C-K Validator] ${diagnostics.length} Violation(s) — Copy block below for LLM repair`, "color: #dc2626; font-weight: bold;");
-    console.error(llmPayload);
-    console.table(
-      diagnostics.map((d) => ({
-        Code: d.code,
-        Target: d.nodeId || `${d.link?.from}->${d.link?.to}`,
-        Problem: d.problem,
-        Suggested_Fix: d.fix
-      }))
-    );
+    console.group(`%c[C-K Validator] ${diagnostics.length} Violation(s)`, "color: #dc2626; font-weight: bold;");
+    console.error(lines.join("\n"));
     console.groupEnd();
   }
 };
@@ -283,20 +241,14 @@ const COORD_STORAGE_KEY = "ck_world_positions_v3";
 
 const PositionStore = {
   load() {
-    try {
-      return JSON.parse(localStorage.getItem(COORD_STORAGE_KEY)) || {};
-    } catch {
-      return {};
-    }
+    try { return JSON.parse(localStorage.getItem(COORD_STORAGE_KEY)) || {}; } catch { return {}; }
   },
   save(id, pos) {
     const store = this.load();
     store[id] = { x: Math.round(pos.x), y: Math.round(pos.y) };
     localStorage.setItem(COORD_STORAGE_KEY, JSON.stringify(store));
   },
-  clear() {
-    localStorage.removeItem(COORD_STORAGE_KEY);
-  }
+  clear() { localStorage.removeItem(COORD_STORAGE_KEY); }
 };
 
 const LayoutEngine = {
@@ -309,9 +261,7 @@ const LayoutEngine = {
     const childrenMap = new Map();
     concepts.forEach((c) => childrenMap.set(c.id, []));
     links.forEach((l) => {
-      if (childrenMap.has(l.from) && childrenMap.has(l.to)) {
-        childrenMap.get(l.from).push(l.to);
-      }
+      if (childrenMap.has(l.from) && childrenMap.has(l.to)) childrenMap.get(l.from).push(l.to);
     });
 
     const depthMap = new Map();
@@ -339,11 +289,7 @@ const LayoutEngine = {
       const d = depthMap.has(c.id) ? depthMap.get(c.id) : 0;
       const idxInLevel = levelCounts.get(d) || 0;
       levelCounts.set(d, idxInLevel + 1);
-
-      coords[c.id] = {
-        x: -260 - idxInLevel * 240,
-        y: 100 + d * 130
-      };
+      coords[c.id] = { x: -260 - idxInLevel * 240, y: 100 + d * 130 };
     });
 
     knowledge.forEach((k, idx) => {
@@ -353,10 +299,7 @@ const LayoutEngine = {
       }
       const col = idx % 2;
       const row = Math.floor(idx / 2);
-      coords[k.id] = {
-        x: 240 + col * 240,
-        y: 100 + row * 120
-      };
+      coords[k.id] = { x: 240 + col * 240, y: 100 + row * 120 };
     });
 
     return coords;
@@ -383,14 +326,15 @@ const LIGHT_STYLE = [
   { selector: 'edge[operator = "KC"], edge[operator = "CK"]', style: { "line-style": "dashed", "line-color": "#9333ea", "target-arrow-color": "#9333ea" } }
 ];
 
+// Refined non-bluish dark mode centered around #191919 grays
 const DARK_STYLE = [
-  { selector: "node", style: { "label": "data(displayLabel)", "text-wrap": "wrap", "text-max-width": "175px", "text-valign": "center", "text-halign": "center", "font-size": "12px", "shape": "round-rectangle", "width": 200, "height": 72, "border-width": 2, "color": "#f8fafc", "background-color": "#1e293b", "border-color": "#3b82f6" } },
-  { selector: "node[?isRoot]", style: { "background-color": "#1e3a8a", "border-color": "#60a5fa", "border-width": 3, "font-weight": "bold" } },
-  { selector: "node[?isLeaf]", style: { "shape": "barrel", "background-color": "#451a03", "border-color": "#fbbf24", "border-width": 3 } },
-  { selector: 'node[space = "K"]', style: { "shape": "rectangle", "background-color": "#064e3b", "border-color": "#34d399" } },
-  { selector: "node[?hasViolation]", style: { "shape": "round-rectangle", "background-color": "#7f1d1d", "border-color": "#f87171", "border-width": 3 } },
-  { selector: "edge", style: { "width": 2, "curve-style": "bezier", "target-arrow-shape": "triangle", "line-color": "#94a3b8", "target-arrow-color": "#94a3b8" } },
-  { selector: 'edge[operator = "KC"], edge[operator = "CK"]', style: { "line-style": "dashed", "line-color": "#c084fc", "target-arrow-color": "#c084fc" } }
+  { selector: "node", style: { "label": "data(displayLabel)", "text-wrap": "wrap", "text-max-width": "175px", "text-valign": "center", "text-halign": "center", "font-size": "12px", "shape": "round-rectangle", "width": 200, "height": 72, "border-width": 2, "color": "#f5f5f5", "background-color": "#262626", "border-color": "#525252" } },
+  { selector: "node[?isRoot]", style: { "background-color": "#333333", "border-color": "#737373", "border-width": 3, "font-weight": "bold" } },
+  { selector: "node[?isLeaf]", style: { "shape": "barrel", "background-color": "#382e1c", "border-color": "#d97706", "border-width": 3 } },
+  { selector: 'node[space = "K"]', style: { "shape": "rectangle", "background-color": "#1e3323", "border-color": "#22c55e" } },
+  { selector: "node[?hasViolation]", style: { "shape": "round-rectangle", "background-color": "#451a1a", "border-color": "#ef4444", "border-width": 3 } },
+  { selector: "edge", style: { "width": 2, "curve-style": "bezier", "target-arrow-shape": "triangle", "line-color": "#737373", "target-arrow-color": "#737373" } },
+  { selector: 'edge[operator = "KC"], edge[operator = "CK"]', style: { "line-style": "dashed", "line-color": "#a855f7", "target-arrow-color": "#a855f7" } }
 ];
 
 let isDarkMode = true;
@@ -409,7 +353,8 @@ const cy = cytoscape({
 
 function applyTheme() {
   if (canvasWrapEl) {
-    canvasWrapEl.style.backgroundColor = isDarkMode ? "#020617" : "#ffffff";
+    // Neutral dark background instead of deep blue
+    canvasWrapEl.style.backgroundColor = isDarkMode ? "#191919" : "#ffffff";
   }
   cy.style().fromJson(isDarkMode ? DARK_STYLE : LIGHT_STYLE).update();
 }
@@ -425,61 +370,43 @@ function zoomByFactor(factor) {
 }
 
 function fitAllNodes() {
-  if (cy.elements().length > 0) {
-    cy.fit(cy.elements(), 60);
-  }
+  if (cy.elements().length > 0) cy.fit(cy.elements(), 60);
 }
 
-(function setupZoomAndThemeControls() {
+// Hooks into the existing <div id="zoom-controls"> in your HTML
+function setupZoomAndThemeControls() {
   let zoomInBtn = document.getElementById("zoom-in-btn");
   let zoomOutBtn = document.getElementById("zoom-out-btn");
   let fitBtn = document.getElementById("fit-btn") || document.getElementById("fit-all-btn");
   let themeBtn = document.getElementById("theme-toggle-btn");
 
-  if (!zoomInBtn && !zoomOutBtn && !fitBtn && canvasWrapEl) {
-    const bar = document.createElement("div");
-    bar.style.cssText =
-      "position:absolute;bottom:18px;right:18px;z-index:20;display:flex;gap:6px;" +
-      "background:#0f172a;padding:6px;border-radius:8px;box-shadow:0 4px 12px rgba(0,0,0,0.2);";
+  const controlsContainer = document.getElementById("zoom-controls");
 
-    const btnCss =
-      "background:#334155;color:#fff;border:none;padding:7px 12px;border-radius:5px;" +
-      "cursor:pointer;font-size:13px;font-weight:700;user-select:none;";
-
-    zoomInBtn = document.createElement("button");
-    zoomInBtn.textContent = "+";
-    zoomInBtn.title = "Zoom In";
-    zoomInBtn.style.cssText = btnCss;
-
-    zoomOutBtn = document.createElement("button");
-    zoomOutBtn.textContent = "-";
-    zoomOutBtn.title = "Zoom Out";
-    zoomOutBtn.style.cssText = btnCss;
-
-    fitBtn = document.createElement("button");
-    fitBtn.textContent = "Fit All";
-    fitBtn.title = "Fit Entire Diagram";
-    fitBtn.style.cssText = btnCss + "background:#3b82f6;";
-
+  if (controlsContainer && !themeBtn) {
     themeBtn = document.createElement("button");
+    themeBtn.id = "theme-toggle-btn";
+    themeBtn.type = "button";
     themeBtn.textContent = isDarkMode ? "☀️ Light" : "🌙 Dark";
     themeBtn.title = "Toggle Dark/Light Mode";
-    themeBtn.style.cssText = btnCss + "background:#64748b; margin-right: 8px;";
+    
+    // Inject custom styling for the theme button to match your existing buttons roughly
+    themeBtn.style.cssText = "margin-right: 8px; cursor: pointer; padding: 4px 8px;";
+    
+    controlsContainer.insertBefore(themeBtn, controlsContainer.firstChild);
+  }
 
+  if (themeBtn) {
     themeBtn.addEventListener("click", () => {
       isDarkMode = !isDarkMode;
       themeBtn.textContent = isDarkMode ? "☀️ Light" : "🌙 Dark";
       applyTheme();
     });
-
-    bar.append(themeBtn, zoomInBtn, zoomOutBtn, fitBtn);
-    canvasWrapEl.appendChild(bar);
   }
 
   if (zoomInBtn) zoomInBtn.addEventListener("click", () => zoomByFactor(1.35));
   if (zoomOutBtn) zoomOutBtn.addEventListener("click", () => zoomByFactor(1 / 1.35));
   if (fitBtn) fitBtn.addEventListener("click", fitAllNodes);
-})();
+}
 
 function syncBackdropDivider() {
   if (!cColEl) return;
@@ -495,7 +422,6 @@ cy.on("drag", "node", (evt) => {
   const node = evt.target;
   const pos = node.position();
   const margin = 120;
-
   if (node.data("space") === "C" && pos.x > -margin) {
     node.position("x", -margin);
   } else if (node.data("space") === "K" && pos.x < margin) {
@@ -538,9 +464,7 @@ function syncDiagram(shouldFit = false) {
             isRoot,
             isLeaf,
             hasViolation: Boolean(errs),
-            displayLabel: errs
-              ? `${c.label}${metaTag}\n⚠ ${errs.join(", ")}`
-              : `${c.label}${metaTag}${tipBadge}`
+            displayLabel: errs ? `${c.label}${metaTag}\n⚠ ${errs.join(", ")}` : `${c.label}${metaTag}${tipBadge}`
           },
           position: coords[c.id]
         };
@@ -557,12 +481,7 @@ function syncDiagram(shouldFit = false) {
         position: coords[k.id]
       })),
       ...typedLinks.map((l) => ({
-        data: {
-          id: l.id,
-          source: l.from,
-          target: l.to,
-          operator: l.operator
-        }
+        data: { id: l.id, source: l.from, target: l.to, operator: l.operator }
       }))
     ];
 
@@ -702,7 +621,7 @@ const URLSync = {
 };
 
 // ============================================================================
-// EVENT LISTENERS & INITIALIZATION (Bound at the very end)
+// EVENT LISTENERS & INITIALIZATION
 // ============================================================================
 
 if (editorEl) {
@@ -727,7 +646,10 @@ if (exportBtn) {
   exportBtn.addEventListener("click", () => URLSync.exportToUrl());
 }
 
+// Execute setup once DOM is fully loaded to ensure the HTML container exists
 window.addEventListener("DOMContentLoaded", async () => {
+  setupZoomAndThemeControls();
+  
   const loadedFromHash = await URLSync.loadFromUrl();
   if (!loadedFromHash) {
     syncDiagram(true);
